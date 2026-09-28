@@ -796,10 +796,10 @@ void handleWriteUID() {
   byte newUid[4];
   for (int i = 0; i < 4; i++) newUid[i] = strtol(uidHex.substring(i*2, i*2+2).c_str(), NULL, 16);
   if (!waitCard()) { server.send(200, "text/plain", "Kartu tidak terdeteksi."); return; }
-  MFRC522::StatusCode status = rfid.MIFARE_SetUid(newUid, (byte)4, true);
+  bool ok = rfid.MIFARE_SetUid(newUid, (byte)4, true);
   haltCard();
-  if (status != MFRC522::STATUS_OK) {
-    server.send(200, "text/plain", "Gagal tulis UID, pastikan pakai kartu magic (UID changeable). Status: " + String(rfid.GetStatusCodeName(status)));
+  if (!ok) {
+    server.send(200, "text/plain", "Gagal tulis UID, pastikan pakai kartu magic (UID changeable).");
     return;
   }
   server.send(200, "text/plain", "UID baru berhasil ditulis: " + uidHex);
