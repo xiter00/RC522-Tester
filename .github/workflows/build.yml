@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    paths:
+      - 'RC522_Tester/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          echo "$PWD/bin" >> $GITHUB_PATH
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core install esp32:esp32 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+      - name: Install libraries
+        run: |
+          arduino-cli lib install "MFRC522"
+
+      - name: Compile
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32s3 RC522_Tester --export-binaries
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RC522_Tester-firmware
+          path: RC522_Tester/build/**/*.bin
