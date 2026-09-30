@@ -597,6 +597,7 @@ void handleChangeKey() {
   memcpy(k.keyByte, oldKey, 6);
   byte trailerBlock = sector * 4 + 3;
   MFRC522::PICC_Command authCmd = (oldKeyType == "B") ? MFRC522::PICC_CMD_MF_AUTH_KEY_B : MFRC522::PICC_CMD_MF_AUTH_KEY_A;
+  MFRC522::StatusCode status = rfid.PCD_Authenticate(authCmd, trailerBlock, &k, &(rfid.uid));
   if (status != MFRC522::STATUS_OK) {
     haltCard();
     server.send(200, "text/plain", "Auth gagal (pakai Key " + oldKeyType + "): " + String(rfid.GetStatusCodeName(status)));
