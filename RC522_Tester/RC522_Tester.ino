@@ -1074,9 +1074,33 @@ void handleWriteNDEF() {
 
   if (!waitCard()) { server.send(200, "text/plain", "Kartu tidak terdeteksi."); return; }
 
+  int blocksNeeded = (p + 15) / 16;
+  int blockList[6] = {4,5,6,8,9,10};
+  int trailerList[2] = {7,11};
+  int sectorsNeeded = (blocksNeeded + 2) / 3; // how many of sector1/sector2 we'll actually write to
+
+  // Pre-flight: verify we can auth sector 0 AND every sector we're about to write to,
+  // BEFORE touching anything. This prevents sector 0 (MAD) from being rewritten when
+  // a later sector write would fail anyway.
   if (!authTrailerMultiKey(3, nullptr)) {
     haltCard();
     server.send(200, "text/plain", "Auth sektor 0 gagal. Kartu mungkin pakai key custom, coba Format Kartu dulu.");
+    return;
+  }
+  rfid.PCD_StopCrypto1();
+  for (int s = 0; s < sectorsNeeded; s++) {
+    if (!authTrailerMultiKey(trailerList[s], nullptr)) {
+      haltCard();
+      server.send(200, "text/plain", "Auth sektor " + String(s + 1) + " gagal, batal sebelum menulis apapun (sektor 0 tidak disentuh).");
+      return;
+    }
+    rfid.PCD_StopCrypto1();
+  }
+
+  // All required sectors authenticate OK — safe to proceed for real now.
+  if (!authTrailerMultiKey(3, nullptr)) {
+    haltCard();
+    server.send(200, "text/plain", "Auth sektor 0 gagal di percobaan kedua.");
     return;
   }
 
@@ -1088,13 +1112,10 @@ void handleWriteNDEF() {
   rfid.MIFARE_Write(3, trailer0, 16);
   byte trailerNdef[16] = {0xA0,0xA1,0xA2,0xA3,0xA4,0xA5,0x78,0x77,0x88,0xC1,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
-  int blocksNeeded = (p + 15) / 16;
   int written = 0;
   byte padded[192] = {0};
   memcpy(padded, payload, p);
 
-  int blockList[6] = {4,5,6,8,9,10};
-  int trailerList[2] = {7,11};
   int bi = 0;
   for (int sectorAuth = 0; sectorAuth < 2 && bi < blocksNeeded; sectorAuth++) {
     rfid.PCD_StopCrypto1();
