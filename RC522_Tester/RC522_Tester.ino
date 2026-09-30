@@ -121,6 +121,7 @@ button.blue{background:#25a}
 <h2>Baca Kartu</h2>
 <button onclick="readUID()">Baca UID</button>
 <button onclick="readAll()">Baca Semua Sektor (Key Default)</button>
+<button class="blue" id="autoReadBtn" onclick="toggleAutoRead()">Mulai Mode Otomatis (Baca UID)</button>
 </div>
 
 <div class="card">
@@ -153,6 +154,7 @@ button.blue{background:#25a}
 <h2>Test Kartu</h2>
 <p>Tempel kartu lalu tekan tombol. Buzzer bunyi jika cocok dengan kartu tersimpan.</p>
 <button onclick="testCard()">Test Sekarang</button>
+<button class="blue" id="autoTestBtn" onclick="toggleAutoTest()">Mulai Mode Otomatis (Test Kartu)</button>
 <input id="buzzMs" placeholder="Durasi Buzzer (ms)" value="1500">
 <button class="blue" onclick="setBuzz()">Set Durasi Buzzer</button>
 </div>
@@ -259,6 +261,38 @@ async function call(url,opts){
 }
 function readUID(){call('/read_uid')}
 function readAll(){call('/read_all')}
+
+let autoReadTimer=null;
+function toggleAutoRead(){
+  let btn=document.getElementById('autoReadBtn');
+  if(autoReadTimer){
+    clearInterval(autoReadTimer);autoReadTimer=null;
+    btn.innerText='Mulai Mode Otomatis (Baca UID)';
+    btn.className='blue';
+  }else{
+    btn.innerText='Berhenti Mode Otomatis';
+    btn.className='red';
+    autoReadTimer=setInterval(async()=>{
+      try{let r=await fetch('/poll_uid');let t=await r.text();if(t!=='-')log(t)}catch(e){}
+    },500);
+  }
+}
+
+let autoTestTimer=null;
+function toggleAutoTest(){
+  let btn=document.getElementById('autoTestBtn');
+  if(autoTestTimer){
+    clearInterval(autoTestTimer);autoTestTimer=null;
+    btn.innerText='Mulai Mode Otomatis (Test Kartu)';
+    btn.className='blue';
+  }else{
+    btn.innerText='Berhenti Mode Otomatis';
+    btn.className='red';
+    autoTestTimer=setInterval(async()=>{
+      try{let r=await fetch('/poll_test');let t=await r.text();if(t!=='-')log(t)}catch(e){}
+    },600);
+  }
+}
 function writeBlock(){
   let b=document.getElementById('wBlock').value;
   let d=document.getElementById('wData').value;
@@ -362,6 +396,63 @@ function deleteCard(){
 
 void handleRoot() {
   server.send(200, "text/html", PAGE_HTML);
+}
+
+const byte FALLBACK_KEYS[3][6] = {
+  {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF},
+  {0xA0,0xA1,0xA2,0xA3,0xA4,0xA5},
+  {0xD3,0xF7,0xD3,0xF7,0xD3,0xF7}
+};
+
+bool authTrailerMultiKey(byte trailerBlock, byte *keyUsedOut) {
+  for (int i = 0; i < 3; i++) {
+    MFRC522::MIFARE_Key k;
+    memcpy(k.keyByte, FALLBACK_KEYS[i], 6);
+    MFRC522::StatusCode st = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &k, &(rfid.uid));
+    if (st == MFRC522::STATUS_OK) {
+      if (keyUsedOut) memcpy(keyUsedOut, FALLBACK_KEYS[i], 6);
+      return true;
+    }
+    rfid.PCD_StopCrypto1();
+  }
+  return false;
+}
+
+void handlePollUID() {
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    lastUID = uidToString(&rfid.uid);
+    String type = rfid.PICC_GetTypeName(rfid.PICC_GetType(rfid.uid.sak));
+    haltCard();
+    server.send(200, "text/plain", "UID: " + lastUID + "\nTipe: " + type);
+  } else {
+    server.send(200, "text/plain", "-");
+  }
+}
+
+void handlePollTest() {
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    String uid = uidToString(&rfid.uid);
+    haltCard();
+    lastUID = uid;
+    prefs.begin("cards", true);
+    int count = prefs.getInt("count", 0);
+    String matchName = "";
+    for (int i = 0; i < count; i++) {
+      if (prefs.getString(("uid" + String(i)).c_str(), "") == uid) {
+        matchName = prefs.getString(("name" + String(i)).c_str(), "");
+        break;
+      }
+    }
+    prefs.end();
+    if (matchName != "") {
+      beep(buzzerDurationMs);
+      server.send(200, "text/plain", "COCOK: " + matchName + " (" + uid + ")");
+    } else {
+      server.send(200, "text/plain", "TIDAK COCOK. UID: " + uid);
+    }
+  } else {
+    server.send(200, "text/plain", "-");
+  }
 }
 
 void handleReadUID() {
@@ -806,29 +897,38 @@ void handleWriteUID() {
 }
 
 void handleFormatCard() {
-  if (!server.hasArg("key")) { server.send(200, "text/plain", "Parameter kurang."); return; }
-  byte key[6];
-  if (!parseHexKey(server.arg("key"), key)) { server.send(200, "text/plain", "Format key salah."); return; }
+  String userKeyHex = server.hasArg("key") ? server.arg("key") : "";
+  byte userKey[6];
+  bool hasUserKey = parseHexKey(userKeyHex, userKey);
+
   if (!waitCard()) { server.send(200, "text/plain", "Kartu tidak terdeteksi."); return; }
-  MFRC522::MIFARE_Key k;
-  memcpy(k.keyByte, key, 6);
   int okSectors = 0;
+  int failSectors = 0;
   byte zeroData[16] = {0};
   byte defaultTrailer[16] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x07,0x80,0x69,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
   for (byte sector = 0; sector < 16; sector++) {
     byte trailerBlock = sector * 4 + 3;
-    MFRC522::StatusCode status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &k, &(rfid.uid));
-    if (status != MFRC522::STATUS_OK) continue;
+    bool authOk = false;
+    if (hasUserKey) {
+      MFRC522::MIFARE_Key k;
+      memcpy(k.keyByte, userKey, 6);
+      MFRC522::StatusCode st = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &k, &(rfid.uid));
+      if (st == MFRC522::STATUS_OK) authOk = true;
+      else rfid.PCD_StopCrypto1();
+    }
+    if (!authOk) authOk = authTrailerMultiKey(trailerBlock, nullptr);
+    if (!authOk) { failSectors++; continue; }
+
     for (byte b = 0; b < 3; b++) {
       byte block = sector * 4 + b;
       if (sector == 0 && b == 0) continue;
       rfid.MIFARE_Write(block, zeroData, 16);
     }
     MFRC522::StatusCode ws = rfid.MIFARE_Write(trailerBlock, defaultTrailer, 16);
-    if (ws == MFRC522::STATUS_OK) okSectors++;
+    if (ws == MFRC522::STATUS_OK) okSectors++; else failSectors++;
   }
   haltCard();
-  server.send(200, "text/plain", "Format selesai, " + String(okSectors) + "/16 sektor dikembalikan ke default.");
+  server.send(200, "text/plain", "Format selesai, " + String(okSectors) + "/16 sektor dikembalikan ke default. " + String(failSectors) + " sektor gagal (key tidak dikenal).");
 }
 
 int buildURIRecord(byte *rec, String url, bool mb, bool me) {
@@ -938,11 +1038,12 @@ void handleWriteNDEF() {
   if (p > 96) { server.send(200, "text/plain", "Data terlalu besar, muat sampai sekitar 90 byte saja."); return; }
 
   if (!waitCard()) { server.send(200, "text/plain", "Kartu tidak terdeteksi."); return; }
-  MFRC522::MIFARE_Key k;
-  memcpy(k.keyByte, (byte*)"\xFF\xFF\xFF\xFF\xFF\xFF", 6);
 
-  MFRC522::StatusCode status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 3, &k, &(rfid.uid));
-  if (status != MFRC522::STATUS_OK) { haltCard(); server.send(200, "text/plain", "Auth sektor 0 gagal."); return; }
+  if (!authTrailerMultiKey(3, nullptr)) {
+    haltCard();
+    server.send(200, "text/plain", "Auth sektor 0 gagal. Kartu mungkin pakai key custom, coba Format Kartu dulu.");
+    return;
+  }
 
   byte mad[16] = {0x01,0x03,0xA0,0x0C,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x03};
   rfid.MIFARE_Write(1, mad, 16);
@@ -961,8 +1062,7 @@ void handleWriteNDEF() {
   int trailerList[2] = {7,11};
   int bi = 0;
   for (int sectorAuth = 0; sectorAuth < 2 && bi < blocksNeeded; sectorAuth++) {
-    status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerList[sectorAuth], &k, &(rfid.uid));
-    if (status != MFRC522::STATUS_OK) continue;
+    if (!authTrailerMultiKey(trailerList[sectorAuth], nullptr)) { bi += 3; continue; }
     for (int j = 0; j < 3 && bi < blocksNeeded; j++, bi++) {
       MFRC522::StatusCode ws = rfid.MIFARE_Write(blockList[sectorAuth * 3 + j], padded + bi * 16, 16);
       if (ws == MFRC522::STATUS_OK) written++;
@@ -1077,6 +1177,8 @@ void setup() {
   server.on("/write_ndef", handleWriteNDEF);
   server.on("/self_test", handleSelfTest);
   server.on("/delete_card", handleDeleteCard);
+  server.on("/poll_uid", handlePollUID);
+  server.on("/poll_test", handlePollTest);
   server.begin();
 }
 

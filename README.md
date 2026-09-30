@@ -24,14 +24,14 @@ Buzzer: GPIO4 ke buzzer aktif, satu kaki lagi ke GND.
 
 Menu yang ada:
 
-- **Baca UID** - baca UID kartu yang ditempel.
+- **Baca UID** - baca UID kartu yang ditempel. Ada tombol Mode Otomatis, sekali aktif tinggal gonta-ganti kartu tanpa klik ulang.
 - **Baca Semua Sektor** - dump isi semua blok pakai key default `FFFFFFFFFFFF`.
 - **Tulis Blok** - tulis data hex 16 byte ke blok tertentu, bisa pilih Key A atau Key B.
 - **Ganti Key Sektor** - ganti key A dan B satu sektor.
 - **Simpan Kartu** - simpan UID kartu terakhir yang dibaca ke flash, dikasih nama.
 - **Lihat Kartu Tersimpan** - lihat semua kartu yang udah disimpan.
 - **Hapus Semua Kartu Tersimpan** - reset data tersimpan.
-- **Test Kartu** - tempel kartu, kalau UID-nya cocok sama yang tersimpan, buzzer bunyi.
+- **Test Kartu** - tempel kartu, kalau UID-nya cocok sama yang tersimpan, buzzer bunyi. Ada Mode Otomatis juga, tinggal gonta-ganti kartu terus dites tanpa klik ulang.
 - **Set Durasi Buzzer** - atur berapa lama buzzer bunyi saat cocok.
 - **Baca Dengan Key Custom** - dump semua sektor pakai key selain default.
 - **Cek / Brute Key Sektor** - coba beberapa key umum (default, MAD, NDEF, dll) per sektor buat cari key aktif.
@@ -60,3 +60,4 @@ Buat compile manual di Arduino IDE:
 - Key default kartu polos baru: `FFFFFFFFFFFF`.
 - Jangan tulis ke block 0 (data manufacturer) dan block trailer (block 3, 7, 11, dst) lewat menu tulis blok biasa, itu udah dicegah otomatis.
 - Ganti key sektor bikin permanen, kalau lupa key baru kartu sektor itu gak bisa diakses lagi.
+- Fitur NDEF dan Format Kartu sekarang otomatis coba beberapa key umum (default, MAD, NDEF key), jadi tetap bisa nulis ulang walau kartu udah pernah diformat NDEF sebelumnya.
