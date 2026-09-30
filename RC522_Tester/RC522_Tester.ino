@@ -143,7 +143,8 @@ button.blue{background:#25a}
 <div class="card">
 <h2>Ganti Key Sektor</h2>
 <input id="cSector" placeholder="Nomor Sektor (0-15)">
-<input id="cOldKey" placeholder="Key A Lama Hex" value="FFFFFFFFFFFF">
+<input id="cOldKey" placeholder="Key Lama Hex" value="FFFFFFFFFFFF">
+<select id="cOldKeyType"><option value="A">Auth pakai Key A</option><option value="B">Auth pakai Key B</option></select>
 <input id="cNewKeyA" placeholder="Key A Baru Hex (12 char)">
 <input id="cNewKeyB" placeholder="Key B Baru Hex (12 char)">
 <button class="red" onclick="changeKey()">Ganti Key</button>
@@ -334,9 +335,10 @@ function writeBlock(){
 function changeKey(){
   let s=document.getElementById('cSector').value;
   let ok=document.getElementById('cOldKey').value;
+  let okt=document.getElementById('cOldKeyType').value;
   let nka=document.getElementById('cNewKeyA').value;
   let nkb=document.getElementById('cNewKeyB').value;
-  call('/change_key?sector='+s+'&oldkey='+ok+'&newkeya='+nka+'&newkeyb='+nkb)
+  call('/change_key?sector='+s+'&oldkey='+ok+'&oldkeytype='+okt+'&newkeya='+nka+'&newkeyb='+nkb)
 }
 function saveCard(){
   let n=document.getElementById('sName').value;
@@ -579,6 +581,7 @@ void handleChangeKey() {
   }
   int sector = server.arg("sector").toInt();
   String oldKeyHex = server.arg("oldkey");
+  String oldKeyType = server.hasArg("oldkeytype") ? server.arg("oldkeytype") : "A";
   String newKeyAHex = server.arg("newkeya");
   String newKeyBHex = server.arg("newkeyb");
   byte oldKey[6], newKeyA[6], newKeyB[6];
@@ -593,10 +596,10 @@ void handleChangeKey() {
   MFRC522::MIFARE_Key k;
   memcpy(k.keyByte, oldKey, 6);
   byte trailerBlock = sector * 4 + 3;
-  MFRC522::StatusCode status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &k, &(rfid.uid));
+  MFRC522::PICC_Command authCmd = (oldKeyType == "B") ? MFRC522::PICC_CMD_MF_AUTH_KEY_B : MFRC522::PICC_CMD_MF_AUTH_KEY_A;
   if (status != MFRC522::STATUS_OK) {
     haltCard();
-    server.send(200, "text/plain", "Auth gagal: " + String(rfid.GetStatusCodeName(status)));
+    server.send(200, "text/plain", "Auth gagal (pakai Key " + oldKeyType + "): " + String(rfid.GetStatusCodeName(status)));
     return;
   }
   byte trailerData[16];
@@ -609,7 +612,7 @@ void handleChangeKey() {
     server.send(200, "text/plain", "Ganti key gagal: " + String(rfid.GetStatusCodeName(status)));
     return;
   }
-  server.send(200, "text/plain", "Key sektor " + String(sector) + " berhasil diganti.");
+  server.send(200, "text/plain", "Key sektor " + String(sector) + " berhasil diganti (auth pakai Key " + oldKeyType + ").");
 }
 
 void handleSaveCard() {
