@@ -80,6 +80,8 @@ String bytesToHex(byte *buf, int len) {
 }
 
 bool waitCard(int timeoutMs = 3000) {
+  rfid.PCD_Init();          // reset RC522 tiap mulai sesi baru, biar crypto/antena gak nyangkut
+  delay(20);
   unsigned long start = millis();
   while (millis() - start < (unsigned long)timeoutMs) {
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) return true;
@@ -109,7 +111,12 @@ input,select{width:100%;padding:8px;margin:5px 0;background:#222;color:#eee;bord
 button{width:100%;padding:10px;margin:5px 0;background:#0a7;border:none;color:#fff;border-radius:6px;font-size:14px}
 button.red{background:#a22}
 button.blue{background:#25a}
-#log{background:#000;color:#0f0;padding:10px;border-radius:6px;font-size:12px;white-space:pre-wrap;height:200px;overflow-y:auto}
+#log{background:#000;color:#0f0;padding:10px;border-radius:6px;font-size:12px;white-space:pre-wrap;height:260px;overflow-y:auto;display:flex;flex-direction:column-reverse}
+.logEntry{border-bottom:1px solid #222;padding:4px 0}
+.logEntry.err{color:#f55}
+.logEntry.ok{color:#0f0}
+.logTime{color:#888}
+.logUrl{color:#5af}
 .row{display:flex;gap:6px}
 .row>div{flex:1}
 </style>
@@ -247,17 +254,41 @@ button.blue{background:#25a}
 
 <div class="card">
 <h2>Log</h2>
-<div id="log">siap.</div>
+<div id="log"></div>
+<button class="blue" onclick="clearLog()">Hapus Log</button>
 </div>
 
 <script>
-function log(t){document.getElementById('log').innerText=t}
+function nowStr(){
+  let d=new Date();
+  function p(n){return String(n).padStart(2,'0')}
+  return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+}
+function isErrText(t){
+  t=t.toLowerCase();
+  return t.indexOf('gagal')>=0||t.indexOf('salah')>=0||t.indexOf('error')>=0||t.indexOf('tidak terdeteksi')>=0||t.indexOf('tidak ada')>=0||t.indexOf('kurang')>=0;
+}
+function appendLog(url,status,text,jsError){
+  let box=document.getElementById('log');
+  let isErr=jsError||status===0||status>=400||isErrText(text);
+  let div=document.createElement('div');
+  div.className='logEntry '+(isErr?'err':'ok');
+  let statusTxt=jsError?'JS-ERROR':(status===0?'NO-CONN':('HTTP '+status));
+  div.innerHTML='<span class="logTime">['+nowStr()+']</span> <span class="logUrl">'+url+'</span> <b>'+statusTxt+'</b><br>'+text.replace(/</g,'&lt;');
+  box.appendChild(div);
+  while(box.children.length>100) box.removeChild(box.firstChild);
+}
+function clearLog(){document.getElementById('log').innerHTML=''}
+function log(t){appendLog('(poll)',200,t,false)}
 async function call(url,opts){
   try{
     let r=await fetch(url,opts);
     let t=await r.text();
-    log(t);
-  }catch(e){log("Error: "+e)}
+    appendLog(url,r.status,t,false);
+    return t;
+  }catch(e){
+    appendLog(url,0,String(e),true);
+  }
 }
 function readUID(){call('/read_uid')}
 function readAll(){call('/read_all')}
@@ -273,7 +304,7 @@ function toggleAutoRead(){
     btn.innerText='Berhenti Mode Otomatis';
     btn.className='red';
     autoReadTimer=setInterval(async()=>{
-      try{let r=await fetch('/poll_uid');let t=await r.text();if(t!=='-')log(t)}catch(e){}
+      try{let r=await fetch('/poll_uid');let t=await r.text();if(t!=='-')appendLog('/poll_uid',r.status,t,false)}catch(e){appendLog('/poll_uid',0,String(e),true)}
     },500);
   }
 }
@@ -289,7 +320,7 @@ function toggleAutoTest(){
     btn.innerText='Berhenti Mode Otomatis';
     btn.className='red';
     autoTestTimer=setInterval(async()=>{
-      try{let r=await fetch('/poll_test');let t=await r.text();if(t!=='-')log(t)}catch(e){}
+      try{let r=await fetch('/poll_test');let t=await r.text();if(t!=='-')appendLog('/poll_test',r.status,t,false)}catch(e){appendLog('/poll_test',0,String(e),true)}
     },600);
   }
 }
@@ -1062,6 +1093,7 @@ void handleWriteNDEF() {
   int trailerList[2] = {7,11};
   int bi = 0;
   for (int sectorAuth = 0; sectorAuth < 2 && bi < blocksNeeded; sectorAuth++) {
+    rfid.PCD_StopCrypto1();
     if (!authTrailerMultiKey(trailerList[sectorAuth], nullptr)) { bi += 3; continue; }
     for (int j = 0; j < 3 && bi < blocksNeeded; j++, bi++) {
       MFRC522::StatusCode ws = rfid.MIFARE_Write(blockList[sectorAuth * 3 + j], padded + bi * 16, 16);
