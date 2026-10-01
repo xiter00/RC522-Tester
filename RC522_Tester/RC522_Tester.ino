@@ -438,25 +438,25 @@ const byte FALLBACK_KEYS[3][6] = {
 };
 
 bool reselectCard() {
-  rfid.PICC_HaltA();
+  // Do NOT PICC_HaltA() here. Switching sector/key authentication on the
+  // same card only needs StopCrypto1() — halting puts the card to sleep,
+  // and PICC_IsNewCardPresent() only sends REQA, which per ISO14443-3
+  // cannot wake a halted card (only WUPA can). That mismatch is what was
+  // causing "KARTU HILANG" even though the card never physically moved.
   rfid.PCD_StopCrypto1();
-  delay(50);
-  unsigned long wakeStart = millis();
-  while (millis() - wakeStart < 300) {
-    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) return true;
-    delay(20);
-  }
-  return false;
+  delay(10);
+  return true;
 }
 
 bool authTrailerMultiKey(byte trailerBlock, byte *keyUsedOut, String *log = nullptr) {
   for (int attempt = 0; attempt < 2; attempt++) {
     if (attempt == 1) {
-      // Previous key loop failed outright. Fully halt + reselect the card
-      // so the retry starts from a clean comms state, same as a brand new tap.
-      bool reselected = reselectCard();
-      if (log) *log += "  blok" + String(trailerBlock) + " re-select setelah semua key gagal -> " + (reselected ? "OK, retry" : "KARTU HILANG dari field") + "\n";
-      if (!reselected) return false; // card really gone, no point retrying
+      // Comms can get into a bad state after 3 failed auths in a row.
+      // Clear Crypto1 and give the RC522 a brief moment before retrying,
+      // without halting the card (halting would require WUPA to wake,
+      // which PICC_IsNewCardPresent does not send).
+      reselectCard();
+      if (log) *log += "  blok" + String(trailerBlock) + " reset comms setelah semua key gagal, retry\n";
     }
     for (int i = 0; i < 3; i++) {
       MFRC522::MIFARE_Key k;
