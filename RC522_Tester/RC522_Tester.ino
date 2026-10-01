@@ -1109,23 +1109,24 @@ void handleWriteNDEF() {
   // Pre-flight: verify we can auth sector 0 AND every sector we're about to write to,
   // BEFORE touching anything. This prevents sector 0 (MAD) from being rewritten when
   // a later sector write would fail anyway.
+  // IMPORTANT: no StopCrypto1()/halt between these auth calls when switching sectors —
+  // handleReadAllCustom proves PCD_Authenticate() can be called directly back-to-back
+  // for different sectors on the same card. Adding StopCrypto1() here (as the original
+  // script's write_ndef did) is what was causing auth to the next sector to fail.
   if (!authTrailerMultiKey(3, nullptr, &diagLog)) {
     haltCard();
     server.send(200, "text/plain", "Auth sektor 0 gagal. Kartu mungkin pakai key custom, coba Format Kartu dulu.\n\nLog:\n" + diagLog);
     return;
   }
-  reselectCard();
   for (int s = 0; s < sectorsNeeded; s++) {
     if (!authTrailerMultiKey(trailerList[s], nullptr, &diagLog)) {
       haltCard();
       server.send(200, "text/plain", "Auth sektor " + String(s + 1) + " gagal, batal sebelum menulis apapun (sektor 0 tidak disentuh).\n\nLog:\n" + diagLog);
       return;
     }
-    reselectCard();
   }
 
   // All required sectors authenticate OK — safe to proceed for real now.
-  reselectCard();
   if (!authTrailerMultiKey(3, nullptr, &diagLog)) {
     haltCard();
     server.send(200, "text/plain", "Auth sektor 0 gagal di percobaan kedua.\n\nLog:\n" + diagLog);
@@ -1146,7 +1147,6 @@ void handleWriteNDEF() {
 
   int bi = 0;
   for (int sectorAuth = 0; sectorAuth < 2 && bi < blocksNeeded; sectorAuth++) {
-    reselectCard();
     if (!authTrailerMultiKey(trailerList[sectorAuth], nullptr, &diagLog)) {
       diagLog += "  sektor" + String(sectorAuth + 1) + " auth gagal saat fase tulis (padahal pre-flight lolos) -> skip 3 blok\n";
       bi += 3;
