@@ -437,8 +437,27 @@ const byte FALLBACK_KEYS[3][6] = {
   {0xD3,0xF7,0xD3,0xF7,0xD3,0xF7}
 };
 
+bool reselectCard() {
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  delay(50);
+  unsigned long wakeStart = millis();
+  while (millis() - wakeStart < 300) {
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) return true;
+    delay(20);
+  }
+  return false;
+}
+
 bool authTrailerMultiKey(byte trailerBlock, byte *keyUsedOut, String *log = nullptr) {
   for (int attempt = 0; attempt < 2; attempt++) {
+    if (attempt == 1) {
+      // Previous key loop failed outright. Fully halt + reselect the card
+      // so the retry starts from a clean comms state, same as a brand new tap.
+      bool reselected = reselectCard();
+      if (log) *log += "  blok" + String(trailerBlock) + " re-select setelah semua key gagal -> " + (reselected ? "OK, retry" : "KARTU HILANG dari field") + "\n";
+      if (!reselected) return false; // card really gone, no point retrying
+    }
     for (int i = 0; i < 3; i++) {
       MFRC522::MIFARE_Key k;
       memcpy(k.keyByte, FALLBACK_KEYS[i], 6);
@@ -452,22 +471,6 @@ bool authTrailerMultiKey(byte trailerBlock, byte *keyUsedOut, String *log = null
         return true;
       }
       rfid.PCD_StopCrypto1();
-    }
-    if (attempt == 0) {
-      // Crypto1 state can get stuck on a real auth failure even after
-      // StopCrypto1(). Fully halt + reselect the card so the next
-      // auth starts from a clean state, same as a brand new tap.
-      rfid.PICC_HaltA();
-      rfid.PCD_StopCrypto1();
-      delay(50);
-      unsigned long wakeStart = millis();
-      bool reselected = false;
-      while (millis() - wakeStart < 300) {
-        if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) { reselected = true; break; }
-        delay(20);
-      }
-      if (log) *log += "  blok" + String(trailerBlock) + " re-select setelah semua key gagal -> " + (reselected ? "OK, retry" : "KARTU HILANG dari field") + "\n";
-      if (!reselected) return false; // card really gone, no point retrying
     }
   }
   return false;
@@ -1111,17 +1114,18 @@ void handleWriteNDEF() {
     server.send(200, "text/plain", "Auth sektor 0 gagal. Kartu mungkin pakai key custom, coba Format Kartu dulu.\n\nLog:\n" + diagLog);
     return;
   }
-  rfid.PCD_StopCrypto1();
+  reselectCard();
   for (int s = 0; s < sectorsNeeded; s++) {
     if (!authTrailerMultiKey(trailerList[s], nullptr, &diagLog)) {
       haltCard();
       server.send(200, "text/plain", "Auth sektor " + String(s + 1) + " gagal, batal sebelum menulis apapun (sektor 0 tidak disentuh).\n\nLog:\n" + diagLog);
       return;
     }
-    rfid.PCD_StopCrypto1();
+    reselectCard();
   }
 
   // All required sectors authenticate OK — safe to proceed for real now.
+  reselectCard();
   if (!authTrailerMultiKey(3, nullptr, &diagLog)) {
     haltCard();
     server.send(200, "text/plain", "Auth sektor 0 gagal di percobaan kedua.\n\nLog:\n" + diagLog);
@@ -1142,7 +1146,7 @@ void handleWriteNDEF() {
 
   int bi = 0;
   for (int sectorAuth = 0; sectorAuth < 2 && bi < blocksNeeded; sectorAuth++) {
-    rfid.PCD_StopCrypto1();
+    reselectCard();
     if (!authTrailerMultiKey(trailerList[sectorAuth], nullptr, &diagLog)) {
       diagLog += "  sektor" + String(sectorAuth + 1) + " auth gagal saat fase tulis (padahal pre-flight lolos) -> skip 3 blok\n";
       bi += 3;
