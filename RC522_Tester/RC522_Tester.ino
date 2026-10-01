@@ -1133,13 +1133,31 @@ void handleWriteNDEF() {
     return;
   }
 
-  byte mad[16] = {0x01,0x03,0xA0,0x0C,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x03};
-  rfid.MIFARE_Write(1, mad, 16);
-  byte mad2[16] = {0};
-  rfid.MIFARE_Write(2, mad2, 16);
+  // MAD1: block1 = [CRC, info=0x01, AID sektor1..7], block2 = [AID sektor8..15].
+  // AID NDEF = 0x03E1. Hanya sektor yang benar-benar dipakai ditandai NDEF.
+  byte madAids[30] = {0};
+  for (int s = 0; s < sectorsNeeded; s++) { madAids[s * 2] = 0x03; madAids[s * 2 + 1] = 0xE1; }
+  byte crcBuf[31];
+  crcBuf[0] = 0x01;
+  memcpy(crcBuf + 1, madAids, 30);
+  byte crc = 0xC7;
+  for (int i = 0; i < 31; i++) {
+    crc ^= crcBuf[i];
+    for (int b = 0; b < 8; b++) crc = (crc & 0x80) ? ((crc << 1) ^ 0x1D) : (crc << 1);
+  }
+  byte mad1[16], mad2[16];
+  mad1[0] = crc; mad1[1] = 0x01;
+  memcpy(mad1 + 2, madAids, 14);
+  memcpy(mad2, madAids + 14, 16);
+  MFRC522::StatusCode m1 = rfid.MIFARE_Write(1, mad1, 16);
+  MFRC522::StatusCode m2 = rfid.MIFARE_Write(2, mad2, 16);
+  diagLog += "  write MAD blok1 -> " + String(rfid.GetStatusCodeName(m1)) + ", blok2 -> " + String(rfid.GetStatusCodeName(m2)) + "\n";
+  // Trailer sektor 0 (MAD): key A = A0A1A2A3A4A5, access 78 77 88, GPB C1
   byte trailer0[16] = {0xA0,0xA1,0xA2,0xA3,0xA4,0xA5,0x78,0x77,0x88,0xC1,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-  rfid.MIFARE_Write(3, trailer0, 16);
-  byte trailerNdef[16] = {0xA0,0xA1,0xA2,0xA3,0xA4,0xA5,0x78,0x77,0x88,0xC1,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+  MFRC522::StatusCode t0 = rfid.MIFARE_Write(3, trailer0, 16);
+  diagLog += "  write trailer3 -> " + String(rfid.GetStatusCodeName(t0)) + "\n";
+  // Trailer sektor NDEF (1,2): key A = D3F7D3F7D3F7, access 7F 07 88, GPB 40
+  byte trailerNdef[16] = {0xD3,0xF7,0xD3,0xF7,0xD3,0xF7,0x7F,0x07,0x88,0x40,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
   int written = 0;
   byte padded[192] = {0};
