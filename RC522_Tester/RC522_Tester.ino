@@ -437,16 +437,38 @@ const byte FALLBACK_KEYS[3][6] = {
   {0xD3,0xF7,0xD3,0xF7,0xD3,0xF7}
 };
 
-bool authTrailerMultiKey(byte trailerBlock, byte *keyUsedOut) {
-  for (int i = 0; i < 3; i++) {
-    MFRC522::MIFARE_Key k;
-    memcpy(k.keyByte, FALLBACK_KEYS[i], 6);
-    MFRC522::StatusCode st = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &k, &(rfid.uid));
-    if (st == MFRC522::STATUS_OK) {
-      if (keyUsedOut) memcpy(keyUsedOut, FALLBACK_KEYS[i], 6);
-      return true;
+bool authTrailerMultiKey(byte trailerBlock, byte *keyUsedOut, String *log = nullptr) {
+  for (int attempt = 0; attempt < 2; attempt++) {
+    for (int i = 0; i < 3; i++) {
+      MFRC522::MIFARE_Key k;
+      memcpy(k.keyByte, FALLBACK_KEYS[i], 6);
+      MFRC522::StatusCode st = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &k, &(rfid.uid));
+      if (log) {
+        *log += "  blok" + String(trailerBlock) + " percobaan" + String(attempt) + " key[" + String(i) + "]=" +
+                bytesToHex((byte*)FALLBACK_KEYS[i], 6) + " -> " + String(rfid.GetStatusCodeName(st)) + "\n";
+      }
+      if (st == MFRC522::STATUS_OK) {
+        if (keyUsedOut) memcpy(keyUsedOut, FALLBACK_KEYS[i], 6);
+        return true;
+      }
+      rfid.PCD_StopCrypto1();
     }
-    rfid.PCD_StopCrypto1();
+    if (attempt == 0) {
+      // Crypto1 state can get stuck on a real auth failure even after
+      // StopCrypto1(). Fully halt + reselect the card so the next
+      // auth starts from a clean state, same as a brand new tap.
+      rfid.PICC_HaltA();
+      rfid.PCD_StopCrypto1();
+      delay(50);
+      unsigned long wakeStart = millis();
+      bool reselected = false;
+      while (millis() - wakeStart < 300) {
+        if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) { reselected = true; break; }
+        delay(20);
+      }
+      if (log) *log += "  blok" + String(trailerBlock) + " re-select setelah semua key gagal -> " + (reselected ? "OK, retry" : "KARTU HILANG dari field") + "\n";
+      if (!reselected) return false; // card really gone, no point retrying
+    }
   }
   return false;
 }
@@ -1079,28 +1101,30 @@ void handleWriteNDEF() {
   int trailerList[2] = {7,11};
   int sectorsNeeded = (blocksNeeded + 2) / 3; // how many of sector1/sector2 we'll actually write to
 
+  String diagLog = "Payload: " + String(p) + " byte, blocksNeeded=" + String(blocksNeeded) + ", sectorsNeeded=" + String(sectorsNeeded) + "\n";
+
   // Pre-flight: verify we can auth sector 0 AND every sector we're about to write to,
   // BEFORE touching anything. This prevents sector 0 (MAD) from being rewritten when
   // a later sector write would fail anyway.
-  if (!authTrailerMultiKey(3, nullptr)) {
+  if (!authTrailerMultiKey(3, nullptr, &diagLog)) {
     haltCard();
-    server.send(200, "text/plain", "Auth sektor 0 gagal. Kartu mungkin pakai key custom, coba Format Kartu dulu.");
+    server.send(200, "text/plain", "Auth sektor 0 gagal. Kartu mungkin pakai key custom, coba Format Kartu dulu.\n\nLog:\n" + diagLog);
     return;
   }
   rfid.PCD_StopCrypto1();
   for (int s = 0; s < sectorsNeeded; s++) {
-    if (!authTrailerMultiKey(trailerList[s], nullptr)) {
+    if (!authTrailerMultiKey(trailerList[s], nullptr, &diagLog)) {
       haltCard();
-      server.send(200, "text/plain", "Auth sektor " + String(s + 1) + " gagal, batal sebelum menulis apapun (sektor 0 tidak disentuh).");
+      server.send(200, "text/plain", "Auth sektor " + String(s + 1) + " gagal, batal sebelum menulis apapun (sektor 0 tidak disentuh).\n\nLog:\n" + diagLog);
       return;
     }
     rfid.PCD_StopCrypto1();
   }
 
   // All required sectors authenticate OK — safe to proceed for real now.
-  if (!authTrailerMultiKey(3, nullptr)) {
+  if (!authTrailerMultiKey(3, nullptr, &diagLog)) {
     haltCard();
-    server.send(200, "text/plain", "Auth sektor 0 gagal di percobaan kedua.");
+    server.send(200, "text/plain", "Auth sektor 0 gagal di percobaan kedua.\n\nLog:\n" + diagLog);
     return;
   }
 
@@ -1119,15 +1143,21 @@ void handleWriteNDEF() {
   int bi = 0;
   for (int sectorAuth = 0; sectorAuth < 2 && bi < blocksNeeded; sectorAuth++) {
     rfid.PCD_StopCrypto1();
-    if (!authTrailerMultiKey(trailerList[sectorAuth], nullptr)) { bi += 3; continue; }
+    if (!authTrailerMultiKey(trailerList[sectorAuth], nullptr, &diagLog)) {
+      diagLog += "  sektor" + String(sectorAuth + 1) + " auth gagal saat fase tulis (padahal pre-flight lolos) -> skip 3 blok\n";
+      bi += 3;
+      continue;
+    }
     for (int j = 0; j < 3 && bi < blocksNeeded; j++, bi++) {
       MFRC522::StatusCode ws = rfid.MIFARE_Write(blockList[sectorAuth * 3 + j], padded + bi * 16, 16);
+      diagLog += "  write blok" + String(blockList[sectorAuth * 3 + j]) + " -> " + String(rfid.GetStatusCodeName(ws)) + "\n";
       if (ws == MFRC522::STATUS_OK) written++;
     }
-    rfid.MIFARE_Write(trailerList[sectorAuth], trailerNdef, 16);
+    MFRC522::StatusCode wt = rfid.MIFARE_Write(trailerList[sectorAuth], trailerNdef, 16);
+    diagLog += "  write trailer" + String(trailerList[sectorAuth]) + " -> " + String(rfid.GetStatusCodeName(wt)) + "\n";
   }
   haltCard();
-  server.send(200, "text/plain", "Kartu ditulis NDEF tipe " + type + ", " + String(written) + "/" + String(blocksNeeded) + " blok berhasil.\nCoba tap pakai NFC HP (bukan dari web ini).");
+  server.send(200, "text/plain", "Kartu ditulis NDEF tipe " + type + ", " + String(written) + "/" + String(blocksNeeded) + " blok berhasil.\nCoba tap pakai NFC HP (bukan dari web ini).\n\nLog:\n" + diagLog);
 }
 
 void handleSelfTest() {
