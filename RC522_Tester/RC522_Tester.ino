@@ -5,7 +5,10 @@
 #include <Preferences.h>
 
 #define SS_PIN     10
-#define RST_PIN    9
+#define RST_PIN    7
+#define SCK_PIN    20
+#define MISO_PIN   0
+#define MOSI_PIN   21
 #define BUZZER_PIN 4
 #define BUZZER_MS  1500
 
@@ -1251,7 +1254,7 @@ void setup() {
     keyB.keyByte[i] = 0xFF;
   }
 
-  SPI.begin();
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SS_PIN);
   rfid.PCD_Init();
 
   WiFi.softAP(AP_SSID, AP_PASS);

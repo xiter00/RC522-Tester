@@ -1,16 +1,16 @@
-# RC522 Tester - ESP32S3
+# RC522 Tester - ESP32C3 Supermini
 
-Alat test kartu RFID MIFARE Classic (kartu putih polos 1K) pakai ESP32S3 + RC522. Nyala langsung jadi hotspot, buka dari HP lewat browser, semua kontrol dari situ. Data kartu tersimpan disimpan ke flash (NVS) jadi gak hilang walau ESP dimatiin.
+Alat test kartu RFID MIFARE Classic (kartu putih polos 1K) pakai ESP32C3 Supermini + RC522. Nyala langsung jadi hotspot, buka dari HP lewat browser, semua kontrol dari situ. Data kartu tersimpan disimpan ke flash (NVS) jadi gak hilang walau ESP dimatiin.
 
 ## Wiring
 
-| RC522 | ESP32S3 |
+| RC522 | ESP32C3 Supermini |
 |-------|---------|
 | SDA/SS | GPIO10 |
-| SCK   | GPIO12 |
-| MOSI  | GPIO11 |
-| MISO  | GPIO13 |
-| RST   | GPIO9 |
+| SCK   | GPIO20 |
+| MOSI  | GPIO21 |
+| MISO  | GPIO0 |
+| RST   | GPIO7 |
 | 3.3V  | 3.3V |
 | GND   | GND |
 
@@ -52,7 +52,7 @@ Buat compile manual di Arduino IDE:
 
 1. Install board `esp32` by Espressif.
 2. Install library `MFRC522` by GithubCommunity.
-3. Board pilih ESP32S3 Dev Module.
+3. Board pilih ESP32C3 Dev Module.
 4. Upload `RC522_Tester.ino`.
 
 ## Catatan
