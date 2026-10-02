@@ -4,8 +4,18 @@
 #include <MFRC522.h>
 #include <Preferences.h>
 
+// PENTING: GPIO20/21 dipakai SPI (SCK/MOSI) tapi itu juga pin UART0 (RX/TX).
+// Jadi Serial HARUS lewat USB CDC. Arduino IDE: Tools > USB CDC On Boot > Enabled.
+// (arduino-cli: --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc)
+#if !ARDUINO_USB_CDC_ON_BOOT
+#warning "USB CDC On Boot belum aktif -> Serial bentrok sama pin SPI 20/21, log gak bakal muncul!"
+#endif
+
 #define SS_PIN     10
-#define RST_PIN    9
+#define RST_PIN    7
+#define SCK_PIN    20
+#define MISO_PIN   0
+#define MOSI_PIN   21
 #define BUZZER_PIN 4
 #define BUZZER_MS  1500
 
@@ -1241,8 +1251,177 @@ void handleTestCard() {
   }
 }
 
+// ================= WIFI =================
+bool startAP() {
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+  WiFi.mode(WIFI_AP);
+  delay(100);
+  // Banyak ESP32-C3 SuperMini gagal/ngadat kalau TX power default (antena/regulator jelek).
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  bool ok = WiFi.softAP(AP_SSID, AP_PASS, 1, 0, 4);   // channel 1, gak hidden, max 4 client
+  delay(300);
+  return ok;
+}
+
+void printWifiInfo() {
+  Serial.printf("AP SSID : %s\n", AP_SSID);
+  Serial.printf("AP PASS : %s\n", AP_PASS);
+  Serial.print("AP IP   : "); Serial.println(WiFi.softAPIP());
+  Serial.printf("Client  : %d\n", WiFi.softAPgetStationNum());
+}
+
+// ================= SERIAL COMMAND =================
+String serialBuf = "";
+
+void serialHelp() {
+  Serial.println(F(
+    "\n== Perintah Serial ==\n"
+    "help            daftar perintah\n"
+    "status          info WiFi + RC522\n"
+    "uid             baca UID kartu (tempel kartu dulu)\n"
+    "dump            baca semua sektor pakai key default\n"
+    "save [nama]     simpan UID terakhir ke flash\n"
+    "list            lihat kartu tersimpan\n"
+    "clear           hapus semua kartu tersimpan\n"
+    "test            cek kartu cocok/tidak (buzzer bunyi kalau cocok)\n"
+    "selftest        self test modul RC522\n"
+    "buzz <ms>       set durasi buzzer / bunyi sekali kalau tanpa angka\n"
+    "wifi            info WiFi\n"
+    "wifi restart    nyalain ulang hotspot\n"
+    "reboot          restart ESP\n"));
+}
+
+void serialUID() {
+  if (!waitCard()) { Serial.println("Kartu tidak terdeteksi."); return; }
+  lastUID = uidToString(&rfid.uid);
+  Serial.println("UID : " + lastUID);
+  Serial.println("Tipe: " + String(rfid.PICC_GetTypeName(rfid.PICC_GetType(rfid.uid.sak))));
+  haltCard();
+}
+
+void serialDump() {
+  if (!waitCard()) { Serial.println("Kartu tidak terdeteksi."); return; }
+  lastUID = uidToString(&rfid.uid);
+  Serial.println("UID: " + lastUID);
+  byte buffer[18]; byte size;
+  for (byte sector = 0; sector < 16; sector++) {
+    byte trailer = sector * 4 + 3;
+    MFRC522::StatusCode st = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailer, &keyA, &(rfid.uid));
+    if (st != MFRC522::STATUS_OK) { Serial.printf("Sektor %d: gagal auth\n", sector); continue; }
+    for (byte b = 0; b < 4; b++) {
+      byte block = sector * 4 + b;
+      size = 18;
+      if (rfid.MIFARE_Read(block, buffer, &size) == MFRC522::STATUS_OK)
+        Serial.printf("Blok %02d: %s\n", block, bytesToHex(buffer, 16).c_str());
+      else
+        Serial.printf("Blok %02d: gagal baca\n", block);
+    }
+  }
+  haltCard();
+}
+
+void serialSave(String name) {
+  if (lastUID == "") { Serial.println("Belum ada kartu dibaca. Jalankan 'uid' dulu."); return; }
+  if (name == "") name = lastUID;
+  prefs.begin("cards", false);
+  int count = prefs.getInt("count", 0);
+  bool exists = false;
+  for (int i = 0; i < count; i++)
+    if (prefs.getString(("uid" + String(i)).c_str(), "") == lastUID) { exists = true; break; }
+  if (!exists) {
+    prefs.putString(("uid" + String(count)).c_str(), lastUID);
+    prefs.putString(("name" + String(count)).c_str(), name);
+    prefs.putInt("count", count + 1);
+  }
+  prefs.end();
+  Serial.println(exists ? "UID sudah ada di daftar." : "Tersimpan: " + name + " (" + lastUID + ")");
+}
+
+void serialList() {
+  prefs.begin("cards", true);
+  int count = prefs.getInt("count", 0);
+  Serial.printf("Total kartu: %d\n", count);
+  for (int i = 0; i < count; i++)
+    Serial.printf("%d. %s - %s\n", i + 1,
+      prefs.getString(("name" + String(i)).c_str(), "").c_str(),
+      prefs.getString(("uid" + String(i)).c_str(), "").c_str());
+  prefs.end();
+}
+
+void serialTest() {
+  if (!waitCard()) { Serial.println("Kartu tidak terdeteksi."); return; }
+  String uid = uidToString(&rfid.uid);
+  haltCard();
+  lastUID = uid;
+  prefs.begin("cards", true);
+  int count = prefs.getInt("count", 0);
+  String match = "";
+  for (int i = 0; i < count; i++)
+    if (prefs.getString(("uid" + String(i)).c_str(), "") == uid) {
+      match = prefs.getString(("name" + String(i)).c_str(), ""); break;
+    }
+  prefs.end();
+  if (match != "") { Serial.println("COCOK: " + match + " (" + uid + ")"); beep(buzzerDurationMs); }
+  else Serial.println("TIDAK COCOK. UID: " + uid);
+}
+
+void serialStatus() {
+  printWifiInfo();
+  byte v = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  Serial.printf("RC522   : versi 0x%02X %s\n", v,
+    (v == 0x00 || v == 0xFF) ? "(TIDAK TERDETEKSI, cek wiring)" : "(OK)");
+  Serial.printf("Heap    : %u byte, uptime %lu s\n", ESP.getFreeHeap(), millis() / 1000);
+}
+
+void handleSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n') { if (serialBuf.length() < 80) serialBuf += c; continue; }
+    String line = serialBuf; serialBuf = "";
+    line.trim();
+    if (line == "") continue;
+    String cmd = line, arg = "";
+    int sp = line.indexOf(' ');
+    if (sp > 0) { cmd = line.substring(0, sp); arg = line.substring(sp + 1); arg.trim(); }
+    cmd.toLowerCase();
+
+    if      (cmd == "help" || cmd == "?") serialHelp();
+    else if (cmd == "status")   serialStatus();
+    else if (cmd == "uid")      serialUID();
+    else if (cmd == "dump")     serialDump();
+    else if (cmd == "save")     serialSave(arg);
+    else if (cmd == "list")     serialList();
+    else if (cmd == "clear")    { prefs.begin("cards", false); prefs.clear(); prefs.end(); Serial.println("Semua kartu dihapus."); }
+    else if (cmd == "test")     serialTest();
+    else if (cmd == "selftest") {
+      byte v = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+      Serial.printf("Versi chip: 0x%02X\n", v);
+      Serial.println(rfid.PCD_PerformSelfTest() ? "Self test: LULUS" : "Self test: GAGAL");
+      rfid.PCD_Init();
+    }
+    else if (cmd == "buzz") {
+      if (arg != "") { buzzerDurationMs = arg.toInt(); Serial.printf("Durasi buzzer: %d ms\n", buzzerDurationMs); }
+      else beep(buzzerDurationMs);
+    }
+    else if (cmd == "wifi") {
+      if (arg == "restart") { Serial.println(startAP() ? "AP nyala ulang." : "AP GAGAL nyala."); }
+      printWifiInfo();
+    }
+    else if (cmd == "reboot")   { Serial.println("Restart..."); delay(200); ESP.restart(); }
+    else Serial.println("Perintah gak dikenal. Ketik 'help'.");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+  unsigned long t0 = millis();
+  while (!Serial && millis() - t0 < 3000) delay(10);   // tunggu USB CDC kebuka
+  Serial.println("\n\n=== RC522 Tester boot ===");
+  Serial.printf("Reset reason: %d\n", (int)esp_reset_reason());
+
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
 
@@ -1251,11 +1430,18 @@ void setup() {
     keyB.keyByte[i] = 0xFF;
   }
 
-  SPI.begin();
-  rfid.PCD_Init();
+  // WiFi dinyalain DULUAN, sebelum RC522, biar kalau ada masalah daya/pin ketahuan
+  bool apOk = false;
+  for (int attempt = 1; attempt <= 3 && !apOk; attempt++) {
+    apOk = startAP();
+    Serial.printf("Start AP percobaan %d: %s\n", attempt, apOk ? "OK" : "GAGAL");
+  }
+  printWifiInfo();
 
-  WiFi.softAP(AP_SSID, AP_PASS);
-  Serial.println(WiFi.softAPIP());
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SS_PIN);
+  rfid.PCD_Init();
+  byte v = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  Serial.printf("RC522 versi: 0x%02X %s\n", v, (v == 0x00 || v == 0xFF) ? "(TIDAK TERDETEKSI, cek wiring/3.3V)" : "(OK)");
 
   server.on("/", handleRoot);
   server.on("/read_uid", handleReadUID);
@@ -1284,8 +1470,23 @@ void setup() {
   server.on("/poll_uid", handlePollUID);
   server.on("/poll_test", handlePollTest);
   server.begin();
+
+  Serial.println("Siap. Ketik 'help' buat daftar perintah serial, atau buka http://192.168.4.1");
 }
+
+unsigned long lastApCheck = 0;
 
 void loop() {
   server.handleClient();
+  handleSerial();
+
+  // watchdog AP: kalau IP hilang/AP mati, nyalain ulang
+  if (millis() - lastApCheck > 10000) {
+    lastApCheck = millis();
+    if (WiFi.softAPIP() == IPAddress(0, 0, 0, 0)) {
+      Serial.println("AP mati, restart AP...");
+      startAP();
+      server.begin();
+    }
+  }
 }

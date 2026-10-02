@@ -1,16 +1,16 @@
-# RC522 Tester - ESP32S3
+# RC522 Tester - ESP32C3 Supermini
 
-Alat test kartu RFID MIFARE Classic (kartu putih polos 1K) pakai ESP32S3 + RC522. Nyala langsung jadi hotspot, buka dari HP lewat browser, semua kontrol dari situ. Data kartu tersimpan disimpan ke flash (NVS) jadi gak hilang walau ESP dimatiin.
+Alat test kartu RFID MIFARE Classic (kartu putih polos 1K) pakai ESP32C3 Supermini + RC522. Nyala langsung jadi hotspot, buka dari HP lewat browser, semua kontrol dari situ. Data kartu tersimpan disimpan ke flash (NVS) jadi gak hilang walau ESP dimatiin.
 
 ## Wiring
 
-| RC522 | ESP32S3 |
+| RC522 | ESP32C3 Supermini |
 |-------|---------|
 | SDA/SS | GPIO10 |
-| SCK   | GPIO12 |
-| MOSI  | GPIO11 |
-| MISO  | GPIO13 |
-| RST   | GPIO9 |
+| SCK   | GPIO20 |
+| MOSI  | GPIO21 |
+| MISO  | GPIO0 |
+| RST   | GPIO7 |
 | 3.3V  | 3.3V |
 | GND   | GND |
 
@@ -18,7 +18,7 @@ Buzzer: GPIO4 ke buzzer aktif, satu kaki lagi ke GND.
 
 ## Cara Pakai
 
-1. Nyalain ESP32S3.
+1. Nyalain ESP32C3 Supermini (colok USB).
 2. Konek WiFi HP ke SSID `RC522-Tester`, password `12345678`.
 3. Buka browser ke `192.168.4.1`.
 
@@ -44,6 +44,10 @@ Menu yang ada:
 - **Cek Modul RC522** - baca versi chip dan self test hardware.
 - **Hapus Kartu Ini Saja** - hapus satu entri kartu tersimpan tanpa reset semua.
 
+## Serial Command
+
+Buka Serial Monitor 115200 baud (line ending: Newline), ketik `help`. Perintah: `status`, `uid`, `dump`, `save [nama]`, `list`, `clear`, `test`, `selftest`, `buzz [ms]`, `wifi`, `wifi restart`, `reboot`. WiFi dan serial jalan barengan.
+
 ## Build
 
 Compile otomatis lewat GitHub Actions pakai `arduino-cli`, gak pakai PlatformIO. Firmware `.bin` hasil compile bisa diambil di tab Actions > Artifacts setelah workflow selesai.
@@ -52,8 +56,9 @@ Buat compile manual di Arduino IDE:
 
 1. Install board `esp32` by Espressif.
 2. Install library `MFRC522` by GithubCommunity.
-3. Board pilih ESP32S3 Dev Module.
-4. Upload `RC522_Tester.ino`.
+3. Board pilih ESP32C3 Dev Module.
+4. **Tools > USB CDC On Boot > Enabled** (wajib! GPIO20/21 dipakai SPI, jadi Serial harus lewat USB, kalau gak log kosong).
+5. Upload `RC522_Tester.ino`.
 
 ## Catatan
 
